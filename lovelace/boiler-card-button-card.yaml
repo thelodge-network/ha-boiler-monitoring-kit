@@ -1,0 +1,58 @@
+# Boiler status card — button-card edition (bigger, color-filled tile).
+#
+# Requires the "button-card" custom card from HACS:
+# https://github.com/custom-cards/button-card
+#
+# Reads the SAME sensor.boiler_status attributes the no-HACS card does
+# (packages/boiler_monitoring.yaml computes label/level/color/icon there —
+# this card does no rule evaluation of its own, just display).
+
+type: custom:button-card
+entity: sensor.boiler_status
+show_name: true
+show_state: false
+show_icon: true
+size: 44px
+styles:
+  card:
+    - padding: 18px
+    - background-color: "[[[ return entity.attributes.color || '#5FE3A1' ]]]"
+    - color: "#1a1a1a"
+    - border-radius: 16px
+    - animation: >-
+        [[[ return (entity.attributes.level === 'bad') ? 'boiler-blink 1s linear infinite' : 'none' ]]]
+  name:
+    - font-size: 26px
+    - font-weight: 800
+    - justify-self: start
+  icon:
+    - color: "#1a1a1a"
+    - justify-self: start
+  grid:
+    - grid-template-areas: '"i n" "i s"'
+    - grid-template-columns: 56px 1fr
+extra_styles: |
+  @keyframes boiler-blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0.55; } }
+name: >-
+  [[[ return entity.attributes.label || entity.state ]]]
+icon: >-
+  [[[ return entity.attributes.icon || 'mdi:fire' ]]]
+label: >-
+  [[[
+    const a = entity.attributes;
+    const temp = states['sensor.boiler_water_temp'] ? states['sensor.boiler_water_temp'].state : '—';
+    let msg = temp + '°';
+    if (entity.state === 'below_band_watch' && a.band_delta != null) msg += ' · ' + a.band_delta + '° below heat-on';
+    else if (entity.state === 'overdue') msg += ' · time to fire';
+    else if (a.minutes_since_fired != null) msg += ' · fired ' + a.minutes_since_fired + ' min ago';
+    return msg;
+  ]]]
+tap_action:
+  action: call-service
+  service: script.turn_on
+  target:
+    entity_id: script.boiler_fired
+  confirmation:
+    text: "Boiler fired? This resets the refire timer to green."
+hold_action:
+  action: more-info

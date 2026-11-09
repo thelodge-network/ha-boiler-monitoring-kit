@@ -1,0 +1,114 @@
+# OPTIONAL — a bigger, ring-gauge "wall tablet" tile for Dashie
+# (https://github.com/piitaya/lovelace-mushroom's cousin project, a kiosk
+# dashboard many people run on cheap Android tablets by the door). This is
+# NOT required to use the kit — it's "how I run it on wall tablets", one
+# extra tile for anyone who's already on Dashie. The core card
+# (lovelace/boiler-card-*.yaml) works on any Lovelace dashboard.
+#
+# Needs the button-card custom card from HACS (same as
+# lovelace/boiler-card-button-card.yaml). Reads sensor.boiler_status's
+# attributes — no rule logic duplicated here, it's pure display.
+
+type: custom:button-card
+entity: sensor.boiler_status
+show_name: false
+show_icon: false
+show_state: false
+show_label: false
+variables:
+  st: >-
+    [[[
+      const a = entity.attributes || {};
+      const S = (e) => states[e] ? states[e].state : undefined;
+      return {
+        level: a.level || 'ok',
+        word: a.label || entity.state,
+        glyph: a.icon || 'mdi:fire',
+        col: a.color || '#5FE3A1',
+        temp: S('sensor.boiler_water_temp') ?? '—',
+        pct: Math.max(0, Math.min(1, ((parseFloat(S('sensor.boiler_water_temp'))||0) - 100) / 100)),
+        fired: a.minutes_since_fired != null ? (a.minutes_since_fired + ' min ago') : '—',
+        due: a.due_in_minutes != null ? (a.due_in_minutes > 0 ? ('in ' + a.due_in_minutes + ' min') : 'now') : '—',
+        progress: a.progress ?? 0,
+        I: S('input_number.boiler_refire_hours') ?? '—',
+        blink: entity.state === 'bypass_open',
+        msg: a.band_delta != null && entity.state === 'below_band_watch' ? (a.band_delta + '° below heat-on') : ''
+      };
+    ]]]
+tap_action:
+  action: perform-action
+  perform_action: script.turn_on
+  target:
+    entity_id: script.boiler_fired
+  confirmation:
+    text: "Boiler fired? Reset the timer to green."
+hold_action:
+  action: more-info
+custom_fields:
+  title: >-
+    [[[ return `<ha-icon icon="mdi:fire" style="--mdc-icon-size:22px;color:var(--primary-color)"></ha-icon><span>Boiler</span>`; ]]]
+  ring: >-
+    [[[
+      const st = variables.st; const L = 424.1; const off = L * (1 - st.pct);
+      const arc = 'M 36.4 163.6 A 90 90 0 1 1 163.6 163.6';
+      return `<div style="position:relative;width:250px;height:250px">
+      <svg viewBox="0 0 200 200" style="width:100%;height:100%;overflow:visible">
+        <path d="${arc}" fill="none" stroke="#232B38" stroke-width="14" stroke-linecap="round"/>
+        <path d="${arc}" fill="none" stroke="${st.col}" stroke-width="14" stroke-linecap="round" stroke-dasharray="${L}" stroke-dashoffset="${off.toFixed(1)}" style="transition:stroke-dashoffset .9s cubic-bezier(.22,.61,.36,1)"/>
+      </svg>
+      <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding-top:6px">
+        <div style="font-size:84px;font-weight:800;line-height:1;letter-spacing:-.04em;color:${st.level==='ok' ? 'var(--primary-text-color)' : st.col};${st.blink ? 'animation:dashie-blink 1s ease-in-out infinite' : ''}">${st.temp}<span style="font-size:.34em;font-weight:700;color:var(--secondary-text-color);vertical-align:1.25em;margin-left:2px">°</span></div>
+        <div style="margin-top:10px;font-size:22px;font-weight:800;color:${st.col};display:inline-flex;align-items:center;gap:7px"><ha-icon icon="${st.glyph}" style="--mdc-icon-size:24px"></ha-icon>${st.word}</div>
+      </div></div>`;
+    ]]]
+  facts: >-
+    [[[
+      const st = variables.st;
+      const row = (k, v) => `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px">
+         <span style="font-size:17px;font-weight:700;color:var(--secondary-text-color)">${k}</span>
+         <b style="font-size:22px;font-weight:800;color:var(--primary-text-color);white-space:nowrap">${v}</b></div>`;
+      const msg = st.msg ? `<div style="font-size:17px;font-weight:800;color:${st.col};line-height:1.3">${st.msg}</div>` : '';
+      return `<div style="display:flex;flex-direction:column;gap:14px;justify-content:center;height:100%">
+        ${row('Fired', st.fired)}
+        ${row('Next fire due', st.due)}
+        <div>
+          <div style="position:relative;height:12px;border-radius:6px;background:#232B38">
+            <div style="position:absolute;left:0;top:0;bottom:0;width:${(st.progress*100).toFixed(1)}%;border-radius:6px;background:${st.col}"></div>
+            <span style="position:absolute;left:60%;top:-4px;width:2px;height:20px;background:#FFD21A"></span>
+            <span style="position:absolute;left:80%;top:-4px;width:2px;height:20px;background:#FF9F43"></span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;color:var(--secondary-text-color);margin-top:6px"><span>fired</span><span>red at ${st.I} h</span></div>
+        </div>
+        ${msg}</div>`;
+    ]]]
+styles:
+  card:
+    - padding: "16px 26px 18px"
+    - height: "312px"
+    - box-sizing: "border-box"
+  grid:
+    - grid-template-areas: "'title title' 'ring facts'"
+    - grid-template-columns: "250px 1fr"
+    - grid-template-rows: "auto 1fr"
+    - column-gap: "28px"
+    - height: "100%"
+  custom_fields:
+    title:
+      - justify-self: "start"
+      - display: "inline-flex"
+      - align-items: "center"
+      - gap: "8px"
+      - font-size: "17px"
+      - font-weight: "800"
+      - letter-spacing: ".08em"
+      - text-transform: "uppercase"
+      - color: "var(--secondary-text-color)"
+    ring:
+      - align-self: "center"
+    facts:
+      - align-self: "stretch"
+      - text-align: "left"
+extra_styles: "@keyframes dashie-blink { 50% { opacity: .15; } }"
+grid_options:
+  columns: full
+  rows: auto

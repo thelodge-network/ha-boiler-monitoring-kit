@@ -1,0 +1,45 @@
+%%{init: {"flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 40, "rankSpacing": 50, "padding": 16}, "themeVariables": {"fontSize": "15px", "fontFamily": "Arial, Helvetica, sans-serif", "edgeLabelBackground": "#1e1e1e", "lineColor": "#bbbbbb"}, "themeCSS": ".edgeLabel, .edgeLabel p, .edgeLabel span, .edgeLabel div { color: #ffffff !important; background-color: #1e1e1e !important; } .edgeLabel p { border: 1.5px solid #ffffff !important; border-radius: 4px; padding: 2px 6px !important; font-weight: bold; } .labelBkg { background-color: #1e1e1e !important; }"}}%%
+flowchart TD
+    classDef auto fill:#1f4e79,stroke:#8ab4f8,color:#fff
+    classDef manual fill:#7a3b00,stroke:#ffb74d,color:#fff
+    classDef ok fill:#1b5e20,stroke:#81c784,color:#fff
+
+    A(["Boiler state changes<br/>water · dampers · bypass · timers"]) --> B{"1 · Bypass<br/>handle open?"}
+
+    B -- yes --> B1("AUTO<br/>Card blinks red<br/>BYPASS OPEN"):::auto
+    B1 --> B2{"Closed within<br/>15 min?"}
+    B2 -- "yes · normal wood load<br/>open 30 s or more" --> B3("AUTO<br/>Refire timer + run clock reset<br/>card goes green"):::auto
+    B2 -- no --> B4("AUTO<br/>Bypass escalation<br/>(optional — notify + announce,<br/>wire to your own devices)"):::auto
+    B4 --> B5("MANUAL<br/>Go close the<br/>bypass handle"):::manual
+    B5 --> B3
+
+    B -- no --> C{"2 · Water under hard<br/>floor temp?<br/>(tune to your boiler)"}
+    C -- yes --> C1("AUTO<br/>Card red<br/>UNDER TEMP · something's wrong"):::auto
+    C1 --> C2("MANUAL · check in order<br/>1 · stack fan running?<br/>breaker popped / sooted up<br/>2 · wood bridged? knock it down<br/>3 · out of wood? load it"):::manual
+    C2 --> C3{"Fixed by loading<br/>through the bypass?"}
+    C3 -- "yes · bypass cycled" --> B3
+    C3 -- "fan / breaker only" --> C4("MANUAL<br/>Reset breaker / clean fan<br/>then tap the card"):::manual
+    C4 --> B3
+
+    C -- no --> C5{"2b · Water N° or more<br/>below heat-on?<br/>(set N ≈ 2x your worst normal dip)"}
+    C5 -- yes --> C6("AUTO<br/>Card orange<br/>X° below heat-on · watch it"):::auto
+    C5 -- no --> D{"3 · Water below heat-on<br/>for H hours or more?<br/>(H > your normal recovery cycle)"}
+    D -- yes --> D1("AUTO<br/>Card orange<br/>SLOW RECOVERY"):::auto
+    D1 --> C2
+
+    D -- no --> E{"4 · Blower/damper open<br/>H hours+ since run start<br/>or last fire?<br/>(H > your normal burn)"}
+    E -- yes --> E1("AUTO<br/>Card red<br/>BLOWER RUNNING Xh<br/>check the fire"):::auto
+    E1 --> E2("MANUAL<br/>Look in the firebox<br/>bridged, not gasifying?<br/>knock down / add wood"):::manual
+    E2 --> B3
+
+    E -- no --> F{"5 · Hours since last fire<br/>vs your refire-hours setting I"}
+    F -- "I or more" --> F1("AUTO<br/>Card red<br/>OVERDUE · time to fire"):::auto
+    F -- "0.8·I or more" --> F2("AUTO<br/>Card orange"):::auto
+    F -- "0.6·I or more" --> F3("AUTO<br/>Card yellow"):::auto
+    F -- "under 0.6·I" --> F4(["GREEN<br/>nothing to do"]):::ok
+    F1 --> F5("MANUAL<br/>Fire the boiler<br/>open bypass · load · close"):::manual
+    F2 --> F5
+    F5 --> B3
+
+    N("MANUAL override<br/>Boiler Refire Hours helper<br/>shorter when bitter cold<br/>longer when mild"):::manual --> F
+    M("MANUAL reset<br/>Tap the card<br/>fired without the bypass"):::manual --> B3

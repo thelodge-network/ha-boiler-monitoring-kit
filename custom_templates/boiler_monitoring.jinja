@@ -1,0 +1,86 @@
+{#
+  HA Boiler Monitoring Kit — shared Jinja macro.
+
+  Home Assistant auto-loads every *.jinja file under <config>/custom_templates/
+  and makes its macros available to every template in your install, with no
+  explicit import. Copy this file there (no YAML change needed) alongside
+  packages/boiler_monitoring.yaml.
+
+  Why a macro instead of putting this logic straight in the template sensor:
+  a HA template sensor's own `state` and its `attributes` are each rendered as
+  SEPARATE templates. An attribute template that reads
+  `states('sensor.boiler_status')` to get at the state this same sensor just
+  computed sees the PREVIOUS cycle's value, not the one from this update — a
+  one-cycle-lag bug. Keeping the one rule chain here and having every
+  consumer call the macro fresh avoids that: state and every attribute agree,
+  every time, because each computes its own answer from the same five rules
+  rather than copying from a now-stale sibling.
+#}
+
+{% macro boiler_word() -%}
+  {% set hard_floor = states('input_number.boiler_hard_floor_temp') | float(160) %}
+  {% set watch_offset = states('input_number.boiler_below_band_watch_offset') | float(8) %}
+  {% set below_band_hours = states('input_number.boiler_below_band_hours') | float(3) %}
+  {% set blower_hours = states('input_number.boiler_blower_hours') | float(3) %}
+  {% set refire_hours = states('input_number.boiler_refire_hours') | float(10) %}
+
+  {% set water = states('sensor.boiler_water_temp') | float(none) %}
+  {% set setpoint = states('sensor.boiler_set_water_temp') | float(none) %}
+  {% set diff = states('sensor.boiler_differential') | float(none) %}
+  {% set band = (setpoint - diff) if (setpoint is not none and diff is not none) else none %}
+  {% set damper = states('sensor.boiler_bottom_damper') | float(0) %}
+
+  {% set below_band_since = as_timestamp(states('input_datetime.boiler_below_band_since'), 0) %}
+  {% set run_started = as_timestamp(states('input_datetime.boiler_run_started'), 0) %}
+  {% set last_fired = as_timestamp(states('input_datetime.boiler_last_fired'), 0) %}
+  {% set now_ts = now().timestamp() %}
+
+  {%- if is_state('binary_sensor.boiler_bypass_door_open', 'on') -%}
+    bypass_open
+  {%- elif is_state('binary_sensor.boiler_low_water_alarm', 'on') -%}
+    low_water
+  {%- elif water is not none and water < hard_floor -%}
+    under_floor
+  {%- elif band is not none and water is not none and water <= (band - watch_offset) -%}
+    below_band_watch
+  {%- elif band is not none and water is not none and water < band and below_band_since and (now_ts - below_band_since) >= (below_band_hours * 3600) -%}
+    slow_recovery
+  {%- elif damper > 0.5 and run_started and (now_ts - run_started) >= (blower_hours * 3600) -%}
+    blower_running
+  {%- elif last_fired and (now_ts - last_fired) >= (refire_hours * 3600) -%}
+    overdue
+  {%- elif last_fired and (now_ts - last_fired) >= (0.8 * refire_hours * 3600) -%}
+    fire_soon
+  {%- elif last_fired and (now_ts - last_fired) >= (0.6 * refire_hours * 3600) -%}
+    due_later
+  {%- else -%}
+    ok
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro boiler_level(word) -%}
+  {{- {'bypass_open': 'bad', 'low_water': 'bad', 'under_floor': 'bad',
+       'below_band_watch': 'warn', 'slow_recovery': 'warn',
+       'blower_running': 'bad', 'overdue': 'bad', 'fire_soon': 'warn',
+       'due_later': 'watch', 'ok': 'ok'}.get(word, 'ok') -}}
+{%- endmacro %}
+
+{% macro boiler_color(level) -%}
+  {{- {'ok': '#5FE3A1', 'watch': '#FFD21A', 'warn': '#FF9F43', 'bad': '#FF8A8A'}.get(level, '#5FE3A1') -}}
+{%- endmacro %}
+
+{% macro boiler_icon(word) -%}
+  {{- {'bypass_open': 'mdi:alert-octagon', 'low_water': 'mdi:water-alert',
+       'under_floor': 'mdi:thermometer-alert', 'below_band_watch': 'mdi:alert',
+       'slow_recovery': 'mdi:alert', 'blower_running': 'mdi:alert-octagon',
+       'overdue': 'mdi:fire-alert', 'fire_soon': 'mdi:fire',
+       'due_later': 'mdi:fire', 'ok': 'mdi:check-circle'}.get(word, 'mdi:fire') -}}
+{%- endmacro %}
+
+{% macro boiler_label(word) -%}
+  {{- {'bypass_open': 'BYPASS OPEN', 'low_water': 'LOW WATER',
+       'under_floor': 'UNDER TEMP', 'below_band_watch': 'Watch it',
+       'slow_recovery': 'Slow recovery', 'blower_running': 'Blower running',
+       'overdue': 'OVERDUE', 'fire_soon': 'Fire soon',
+       'due_later': 'Due later', 'ok': 'Good'}.get(word, word) -}}
+{%- endmacro %}

@@ -1,0 +1,58 @@
+# Boiler status card — NO HACS REQUIRED.
+#
+# Uses only core Lovelace cards (vertical-stack + markdown + button),
+# templated against the attributes sensor.boiler_status exposes (see
+# packages/boiler_monitoring.yaml). Paste this into a dashboard view in YAML
+# mode, or recreate the markdown card's `content:` by hand in the UI editor.
+#
+# Want something closer to the original "big number" look with a real
+# per-state background color? See boiler-card-button-card.yaml instead
+# (needs the button-card custom card from HACS).
+
+type: vertical-stack
+cards:
+  - type: markdown
+    content: >-
+      {% set s = states('sensor.boiler_status') %}
+      {% set label = state_attr('sensor.boiler_status', 'label') %}
+      {% set icon = state_attr('sensor.boiler_status', 'icon') %}
+      {% set level = state_attr('sensor.boiler_status', 'level') %}
+      {% set temp = states('sensor.boiler_water_temp') %}
+      {% set band_delta = state_attr('sensor.boiler_status', 'band_delta') %}
+      {% set mins_since = state_attr('sensor.boiler_status', 'minutes_since_fired') %}
+      {% set due_in = state_attr('sensor.boiler_status', 'due_in_minutes') %}
+
+      <ha-alert alert-type="{{ {'bad': 'error', 'warn': 'warning', 'watch': 'warning', 'ok': 'success'}.get(level, 'info') }}">
+      <ha-icon icon="{{ icon }}"></ha-icon>&nbsp;**{{ label }}** &mdash; {{ temp }}°
+
+      {% if s == 'below_band_watch' and band_delta is not none %}
+      {{ band_delta }}° below heat-on — keep an eye on it.
+      {% elif s == 'slow_recovery' %}
+      Below the on/off band for a while — check the fire if it doesn't recover soon.
+      {% elif s == 'blower_running' %}
+      Blower's been running a long time — look in the firebox for a bridged load.
+      {% elif s == 'overdue' %}
+      Time to fire: open the bypass, load, close it.
+      {% elif s == 'bypass_open' %}
+      Close the bypass handle — the fan is running on the bypass, not the fire.
+      {% elif s == 'low_water' %}
+      Low-water alarm — check the boiler now.
+      {% elif s == 'under_floor' %}
+      Check in order: stack fan running? breaker popped? wood bridged? out of wood?
+      {% elif mins_since is not none %}
+      Last fired {{ mins_since | int }} min ago{{ ', due in ' ~ (due_in | int) ~ ' min' if due_in is not none and due_in > 0 else '' }}.
+      {% endif %}
+      </ha-alert>
+  - type: button
+    name: Boiler fired?
+    icon: mdi:fire
+    tap_action:
+      action: perform-action
+      perform_action: script.turn_on
+      target:
+        entity_id: script.boiler_fired
+      confirmation:
+        text: "Boiler fired? This resets the refire timer to green."
+    show_state: false
+    show_icon: true
+    show_name: true

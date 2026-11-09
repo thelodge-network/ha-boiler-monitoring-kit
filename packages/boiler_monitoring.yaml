@@ -1,0 +1,234 @@
+# HA Boiler Monitoring Kit — drop-in package
+#
+# One file. Copy to <config>/packages/boiler_monitoring.yaml (packages must be
+# enabled: `homeassistant: { packages: !include_dir_named packages }` in
+# configuration.yaml).
+#
+# WHAT THIS ASSUMES YOU ALREADY HAVE
+# -----------------------------------
+# This kit does not talk to your boiler controller directly — every boiler/PLC
+# setup is different. It expects FIVE entities already exist, however you got
+# them there (a REST sensor, MQTT, Modbus, ESPHome, a vendor integration...):
+#
+#   sensor.boiler_water_temp              current boiler water temp (°F or °C)
+#   sensor.boiler_set_water_temp          the boiler's own setpoint
+#   sensor.boiler_differential            the boiler's own on/off differential
+#                                         (band = set_water_temp - differential)
+#   sensor.boiler_bottom_damper           0 when idle, >0 while the
+#                                         air damper / induction fan is
+#                                         actively running the fire
+#   binary_sensor.boiler_bypass_door_open on while the loading/bypass door
+#                                         is open
+#
+# Optional sixth entity, if your controller exposes it — omit it and the
+# low-water branch just never fires:
+#
+#   binary_sensor.boiler_low_water_alarm  on when a low-water float/alarm trips
+#
+# Map your real entities onto these names with a couple of template sensors,
+# or rename these five in your own install — see README.md.
+#
+# THE IDEA
+# --------
+# A single "Boiler Status" sensor answers one question every time anyone
+# glances at a dashboard: "does the boiler need me right now?" Five rules,
+# evaluated top to bottom, first match wins. Full writeup + flowchart:
+# docs/boiler-monitoring-logic.md. All five thresholds below are
+# input_numbers so you can tune them to your own boiler without editing YAML.
+
+input_number:
+  - name: Boiler Refire Hours
+    id: boiler_refire_hours
+    min: 2.0
+    max: 24.0
+    step: 0.5
+    mode: box
+    initial: 10.0
+    unit_of_measurement: h
+    icon: mdi:timer-cog
+  - name: Boiler Hard Floor Temp
+    id: boiler_hard_floor_temp
+    min: 80
+    max: 200
+    step: 1
+    mode: box
+    initial: 160
+    unit_of_measurement: "°"
+    icon: mdi:thermometer-alert
+    # Below this, something is actually wrong (stack fan dead, out of wood,
+    # breaker popped) rather than a normal thermal dip. Set it below your
+    # boiler's own low-temp-shutdown setpoint if it has one.
+  - name: Boiler Below-Band Watch Offset
+    id: boiler_below_band_watch_offset
+    min: 2
+    max: 30
+    step: 0.5
+    mode: box
+    initial: 8
+    unit_of_measurement: "°"
+    icon: mdi:thermometer-minus
+    # "Watch it" (orange) fires once water is this many degrees below the
+    # on/off band. Start around 2x your boiler's worst normal dip — log a
+    # few cycles first (see README) and tune from there.
+  - name: Boiler Below-Band Hours
+    id: boiler_below_band_hours
+    min: 0.5
+    max: 12
+    step: 0.5
+    mode: box
+    initial: 3
+    unit_of_measurement: h
+    icon: mdi:clock-alert
+    # "Slow recovery" (orange) fires once water has stayed below the on/off
+    # band this long. Normal recovery cycles should be well under this.
+  - name: Boiler Blower Hours
+    id: boiler_blower_hours
+    min: 0.5
+    max: 12
+    step: 0.5
+    mode: box
+    initial: 3
+    unit_of_measurement: h
+    icon: mdi:fan-alert
+    # "Blower running" (red) fires once the air damper/induction fan has run
+    # continuously this long since the run (or last fire) started — longer
+    # than any normal burn.
+
+input_datetime:
+  - id: boiler_last_fired
+    name: Boiler Last Fired
+    has_date: true
+    has_time: true
+    icon: mdi:fire
+  - id: boiler_run_started
+    name: Boiler Run Started
+    has_date: true
+    has_time: true
+    icon: mdi:fan
+  - id: boiler_below_band_since
+    name: Boiler Below Band Since
+    has_date: true
+    has_time: true
+    icon: mdi:thermometer-low
+
+script:
+  boiler_fired:
+    alias: Boiler Fired (reset refire timer)
+    icon: mdi:fire
+    mode: single
+    sequence:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id:
+            - input_datetime.boiler_last_fired
+            - input_datetime.boiler_run_started
+        data:
+          timestamp: "{{ now().timestamp() }}"
+    # Manual fallback (e.g. "Boiler fired? Reset the timer" button/tap-action
+    # on the Lovelace card) for the rare fire that happens without ever
+    # opening the bypass door — see automation.boiler_auto_reset_on_bypass_close
+    # below for the normal, hands-free path.
+
+automation:
+  - id: boiler_track_run_start
+    alias: "Boiler: track run start"
+    description: >-
+      Stamps input_datetime.boiler_run_started when the air damper / induction
+      fan turns on from idle. Drives the "blower running Xh" rule.
+    mode: single
+    triggers:
+      - trigger: numeric_state
+        entity_id: sensor.boiler_bottom_damper
+        above: 0.5
+    actions:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.boiler_run_started
+        data:
+          timestamp: "{{ now().timestamp() }}"
+
+  - id: boiler_track_below_band_start
+    alias: "Boiler: track below-band start"
+    description: >-
+      Stamps input_datetime.boiler_below_band_since when water drops below
+      (set_water_temp - differential). Drives the "slow recovery" rule —
+      catches a smoldering fire that the run-time rule alone can't see.
+    mode: single
+    triggers:
+      - trigger: template
+        value_template: >-
+          {{ states('sensor.boiler_water_temp')|float(999) <
+             (states('sensor.boiler_set_water_temp')|float(0) -
+              states('sensor.boiler_differential')|float(0)) }}
+    actions:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.boiler_below_band_since
+        data:
+          timestamp: "{{ now().timestamp() }}"
+
+  - id: boiler_auto_reset_on_bypass_close
+    alias: "Boiler: auto-reset refire timer on loading"
+    description: >-
+      The bypass/loading door opening and closing again (30s+, so a quick
+      bump doesn't count) means wood was just loaded. Reset the refire and
+      run clocks automatically — the manual "fired" button stays as a
+      fallback for the rare fire that happens without the bypass.
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.boiler_bypass_door_open
+        from: "on"
+        to: "off"
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ (now() - trigger.from_state.last_changed).total_seconds() >= 30 }}
+    actions:
+      - action: script.turn_on
+        target:
+          entity_id: script.boiler_fired
+
+# The rule chain itself (five rules, first match wins — see
+# docs/boiler-monitoring-logic.md) lives in ONE place:
+# custom_templates/boiler_monitoring.jinja's boiler_word() macro. HA loads
+# every *.jinja file under <config>/custom_templates/ automatically and makes
+# its macros available to every template, so copy that file alongside this
+# one and nothing here needs to repeat the rule logic.
+#
+# Why a macro instead of writing the rules straight into `state:` below and
+# reading them back from `attributes:`: a template sensor's `state` and its
+# `attributes` are rendered as SEPARATE templates, so an attribute that reads
+# this same sensor's own state (`states('sensor.boiler_status')`) sees last
+# cycle's value, not the one `state:` just computed — a one-cycle-lag bug.
+# Every consumer below calls the macro fresh instead, so state and every
+# attribute always agree.
+template:
+  - sensor:
+      - name: "Boiler Status"
+        unique_id: boiler_status
+        icon: "{{ boiler_icon(boiler_word()) }}"
+        state: "{{ boiler_word() }}"
+        attributes:
+          level: "{{ boiler_level(boiler_word()) }}"
+          color: "{{ boiler_color(boiler_level(boiler_word())) }}"
+          icon: "{{ boiler_icon(boiler_word()) }}"
+          label: "{{ boiler_label(boiler_word()) }}"
+          band_delta: >-
+            {% set setpoint = states('sensor.boiler_set_water_temp') | float(none) %}
+            {% set diff = states('sensor.boiler_differential') | float(none) %}
+            {% set water = states('sensor.boiler_water_temp') | float(none) %}
+            {% set band = (setpoint - diff) if (setpoint is not none and diff is not none) else none %}
+            {{ (band - water) | round(0) if (band is not none and water is not none) else none }}
+          minutes_since_fired: >-
+            {% set last_fired = as_timestamp(states('input_datetime.boiler_last_fired'), 0) %}
+            {{ ((now().timestamp() - last_fired) / 60) | round(0) if last_fired else none }}
+          due_in_minutes: >-
+            {% set last_fired = as_timestamp(states('input_datetime.boiler_last_fired'), 0) %}
+            {% set refire_hours = states('input_number.boiler_refire_hours') | float(10) %}
+            {{ ((refire_hours * 3600 - (now().timestamp() - last_fired)) / 60) | round(0) if last_fired else none }}
+          progress: >-
+            {% set last_fired = as_timestamp(states('input_datetime.boiler_last_fired'), 0) %}
+            {% set refire_hours = states('input_number.boiler_refire_hours') | float(10) %}
+            {% set raw = ((now().timestamp() - last_fired) / (refire_hours * 3600)) if last_fired else 0 %}
+            {{ [0, [1, raw] | min] | max }}
